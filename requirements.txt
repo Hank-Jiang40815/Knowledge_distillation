@@ -1,0 +1,12 @@
+torchinfo
+tensorboard
+librosa
+pandas
+toml
+tqdm
+ipykernel
+joblib
+cython
+pytest-runner
+pystoi
+pesq

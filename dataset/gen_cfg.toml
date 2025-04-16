@@ -1,0 +1,10 @@
+[random]
+seed = 0
+
+[path]
+dataset = "./dataset"  # 修改为相对路径
+
+[dataset]
+audio_format = "wav"
+valid_ratio = 0.1
+test_ratio = 0.1
