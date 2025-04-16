@@ -37,6 +37,10 @@ class ComplexConv2d(nn.Module):
             stride=self.stride,
             padding=[self.padding[0], 0],
         )
+        
+        # 確保使用單精度浮點數
+        self.conv2d_real.double().float()
+        self.conv2d_imag.double().float()
 
         self.apply(self.weight_init)
 
@@ -44,8 +48,14 @@ class ComplexConv2d(nn.Module):
         if isinstance(m, nn.Conv2d):
             nn.init.normal_(m.weight.data, std=0.05)
             nn.init.constant_(m.bias.data, 0.0)
+            # 確保權重是單精度浮點數
+            m.weight.data = m.weight.data.float()
+            m.bias.data = m.bias.data.float()
 
     def forward(self, input):
+        # 確保輸入是單精度浮點數
+        input = input.float()
+        
         # input [B, C, F, T]
         # pad [left, right, top, bottom]
         input = F.pad(input, [self.padding[1], 0, 0, 0])
