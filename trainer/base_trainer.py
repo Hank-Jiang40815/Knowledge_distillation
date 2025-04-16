@@ -104,6 +104,9 @@ class BaseTrainer:
         # print params
         print_networks([self.model])
 
+        # Add experiment logging
+        self.log_experiment_info()
+
     @staticmethod
     def loss(enh, clean):
         return -(torch.mean(SI_SDR(enh, clean)))
@@ -342,6 +345,25 @@ class BaseTrainer:
         # self.update_scheduler(loss_total / len(self.valid_iter))
 
         return metrics_score
+
+    def log_experiment_info(self):
+        """记录实验信息到 experiments.log"""
+        import datetime
+        import json
+        
+        log_entry = {
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "dataset_version": self.config["dataset"].get("version", "未指定"),
+            "model_name": self.config["model"]["name"],
+            "model_config": self.config["model"],
+            "experiment_description": self.config.get("description", "未指定"),
+        }
+        
+        log_path = os.path.join(self.base_path, "experiments.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+            
+        print(f"实验信息已记录到 {log_path}")
 
     def __call__(self):
         # to device
