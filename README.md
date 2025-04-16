@@ -17,6 +17,13 @@
 - 数据集
   - [x] [dns_interspeech_2021_mandarin_100h](https://aistudio.baidu.com/aistudio/datasetdetail/119056)
 
+## 项目进度 (2025年4月更新)
+
+- [x] 基础数据预处理
+- [x] 模型框架搭建
+- [ ] 知识蒸馏实现
+- [ ] 模型压缩优化
+
 ## 相关参考链接
 
 ### 复现论文
