@@ -39,6 +39,9 @@ class BaseTrainer:
         # get meta args
         self.use_cudnn = False if self.device == "cpu" else config["meta"]["use_cudnn"]
         self.use_amp = False if self.device == "cpu" else config["meta"]["use_amp"]
+        # 在MPS設備上禁用AMP，因為MPS目前不完全支援
+        if self.device == "mps":
+            self.use_amp = False
         # get base path
         self.base_path = config["path"]["base"]
         # get pre model path
@@ -58,7 +61,7 @@ class BaseTrainer:
         self.win_len = config["dataset"]["win_len"]
         self.hop_len = config["dataset"]["hop_len"]
         self.audio_len = config["dataset"]["audio_len"]
-        self.window = torch.hann_window(self.win_len, periodic=False, device=self.device)
+        self.window = torch.hann_window(self.win_len, periodic=False).to(self.device)
         # get train args
         self.resume = config["train"]["resume"]
         self.epochs = config["train"]["epochs"]
@@ -66,9 +69,10 @@ class BaseTrainer:
         self.valid_interval = config["train"]["valid_interval"]
 
         # init cudnn
-        torch.backends.cudnn.enabled = self.use_cudnn
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        if self.device == "cuda":
+            torch.backends.cudnn.enabled = self.use_cudnn
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
         # init common args
         self.start_epoch = 1
@@ -81,7 +85,10 @@ class BaseTrainer:
         prepare_empty_path([self.checkpoints_path, self.logs_path], self.resume)
 
         # init amp
-        self.scaler = GradScaler(enabled=self.use_amp)
+        if self.device == "cuda" and self.use_amp:
+            self.scaler = GradScaler(enabled=self.use_amp)
+        else:
+            self.scaler = GradScaler(enabled=False)
 
         # init optimizer
         self.optimizer = getattr(torch.optim, config["optimizer"]["name"])(
@@ -266,8 +273,9 @@ class BaseTrainer:
     def train_epoch(self, epoch):
         loss_total = 0.0
         for noisy, clean in tqdm(self.train_iter, desc="train"):
-            noisy = noisy.to(self.device)
-            clean = clean.to(self.device)
+            # 確保張量使用 float32 而非 float64
+            noisy = noisy.to(self.device, dtype=torch.float32)
+            clean = clean.to(self.device, dtype=torch.float32)
 
             # [B, S] -> [B, F, T, 2]
             noisy_spec = self.audio_stft(noisy)
