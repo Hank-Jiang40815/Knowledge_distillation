@@ -20,7 +20,12 @@ def sub_sample(noisy, clean, samples):
     Returns:
         noisy, clean: fixed-length noisy and clean
     """
-    length = len(noisy)
+    # 調整兩個音頻長度為相同的最小長度
+    min_length = min(len(noisy), len(clean))
+    noisy = noisy[:min_length]
+    clean = clean[:min_length]
+    
+    length = min_length
 
     if length > samples:
         start_idx = np.random.randint(length - samples)
