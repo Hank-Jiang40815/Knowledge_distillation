@@ -38,7 +38,7 @@ class ComplexConv2d(nn.Module):
             padding=[self.padding[0], 0],
         )
         
-        # 確保使用單精度浮點數
+        # 确保使用单精度浮点数
         self.conv2d_real.float()
         self.conv2d_imag.float()
 
@@ -48,12 +48,12 @@ class ComplexConv2d(nn.Module):
         if isinstance(m, nn.Conv2d):
             nn.init.normal_(m.weight.data, std=0.05)
             nn.init.constant_(m.bias.data, 0.0)
-            # 確保權重是單精度浮點數 (不要修改設備)
+            # 确保权重是单精度浮点数
             m.weight.data = m.weight.data.float()
             m.bias.data = m.bias.data.float()
 
     def forward(self, input):
-        # 確保輸入是單精度浮點數
+        # 确保输入是单精度浮点数
         input = input.float()
         
         # input [B, C, F, T]

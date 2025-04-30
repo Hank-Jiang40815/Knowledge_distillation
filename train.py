@@ -59,7 +59,7 @@ def main():
     valid_set = DNS_Dataset(dataset_path, config, mode="valid")
     valid_iter = DataLoader(
         valid_set,
-        batch_size=batch_size[1],
+        batch_size=1,  # 将批大小固定为1，避免处理不同长度的音频序列
         shuffle=False,
         num_workers=num_workers,
         drop_last=drop_last,
