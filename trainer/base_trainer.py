@@ -71,6 +71,9 @@ class BaseTrainer:
         self.epochs = config["train"]["epochs"]
         self.valid_start_epoch = config["train"]["valid_start_epoch"]
         self.valid_interval = config["train"]["valid_interval"]
+        # 获取损失函数类型配置
+        self.loss_type = config.get("train", {}).get("loss_type", "si_sdr")  # 默认使用SI-SDR
+        self.mse_weight = config.get("train", {}).get("mse_weight", 0.2)  # 默认MSE权重为0.2(用于组合损失)
 
         # init cudnn
         if self.device == "cuda":
@@ -137,12 +140,37 @@ class BaseTrainer:
         return experiment_id
 
     @staticmethod
-    def loss(enh, clean):
+    def loss(enh, clean, loss_type="si_sdr", mse_weight=0.2):
+        """计算损失函数
+        
+        Args:
+            enh: 增强音频
+            clean: 干净音频
+            loss_type: 损失函数类型，可选"si_sdr"、"mse"或"si_sdr_mse"
+            mse_weight: 当loss_type为"si_sdr_mse"时，MSE损失的权重
+            
+        Returns:
+            损失值
+        """
         # 确保两个输入张量具有相同的形状
         min_len = min(enh.shape[-1], clean.shape[-1])
         enh = enh[..., :min_len]
         clean = clean[..., :min_len]
-        return -(torch.mean(SI_SDR(enh, clean)))
+        
+        # 根据损失类型计算不同的损失
+        if loss_type == "mse":
+            # 均方误差损失
+            return torch.mean((enh - clean) ** 2)
+            
+        elif loss_type == "si_sdr_mse":
+            # SI-SDR和MSE组合损失
+            si_sdr_loss = -(torch.mean(SI_SDR(enh, clean)))
+            mse_loss = torch.mean((enh - clean) ** 2)
+            return si_sdr_loss + mse_weight * mse_loss
+            
+        else:  # 默认使用SI-SDR
+            # 尺度不变信号失真比损失
+            return -(torch.mean(SI_SDR(enh, clean)))
 
     def load_pre_model(self):
         load_model = torch.load(self.pre_model_path, map_location="cpu")
@@ -345,7 +373,7 @@ class BaseTrainer:
             # [B, S]
             enh = self.audio_istft(mask, noisy_spec)
 
-            loss = self.loss(enh, clean)
+            loss = self.loss(enh, clean, loss_type=self.loss_type, mse_weight=self.mse_weight)
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm_value)
@@ -393,7 +421,7 @@ class BaseTrainer:
             clean = clean[..., :min_len]
             enh = enh[..., :min_len]
 
-            loss = self.loss(enh, clean)
+            loss = self.loss(enh, clean, loss_type=self.loss_type, mse_weight=self.mse_weight)
 
             loss_total += loss.item()
 

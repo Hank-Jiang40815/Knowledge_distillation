@@ -148,7 +148,7 @@ if __name__ == "__main__":
     valid_set = DNS_Dataset(dataset_path, config, mode="valid")
     valid_iter = DataLoader(
         valid_set,
-        batch_size=batch_size[1],
+        batch_size=1,  # 强制设置为1，避免不同长度音频的堆叠问题
         shuffle=False,
         num_workers=num_workers,
         drop_last=drop_last,
