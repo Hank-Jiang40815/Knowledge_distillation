@@ -1,9 +1,7 @@
 [meta]
-use_cudnn = true  # 启用 CUDNN 以提高训练速度
+use_cudnn = true
 use_amp = true
-
-# 添加实验描述
-description = "基础 DCCRN 模型训练实验"
+description = "学习率调优实验 - 学习率设置为5e-4"
 
 [ppl]
 n_folds = 1
@@ -11,8 +9,7 @@ n_jobs = 8
 
 [path]
 base = "./output/dccrn"
-pre_model = "./output/dccrn/checkpoints/base/latest_model.pth"
-# pre_model = 0
+pre_model = 0  # 从头开始训练
 
 [visual]
 samples = 2
@@ -22,7 +19,7 @@ save_interval = 1
 
 [optimizer]
 name = "Adam"
-lr = 1e-3
+lr = 5e-4  # 设置学习率为5e-4
 
 [grad]
 clip_grad_norm_value = 10.0
@@ -37,18 +34,18 @@ min_lr = 1e-5
 verbose = true
 
 [dataloader]
-batch_size = [130, 40]
-num_workers = 8
+batch_size = [32, 32]  # 使用批大小32，这是一个较为平衡的选择
+num_workers = 4  # 减少工作线程数以减轻系统负担
 drop_last = false
 pin_memory = false
 
 [dataset]
-version = "1.0.0"  # 添加数据集版本
+version = "1.0.0"
 sr = 16000
 n_fft = 512
-win_len = 512  # 统一为标准配置
-hop_len = 256  # 统一为标准配置
-audio_len = 3.072  # 统一为标准配置
+win_len = 512
+hop_len = 256
+audio_len = 3.072
 limit = 0
 
 [model]
@@ -61,5 +58,5 @@ kernel_size = 5
 [train]
 resume = false
 epochs = 128
-valid_start_epoch = 180
+valid_start_epoch = 1  # 从第一个epoch开始验证
 valid_interval = 1

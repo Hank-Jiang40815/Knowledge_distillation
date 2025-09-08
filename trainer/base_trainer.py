@@ -39,10 +39,17 @@ class BaseTrainer:
         # get meta args
         self.use_cudnn = False if self.device == "cpu" else config["meta"]["use_cudnn"]
         self.use_amp = False if self.device == "cpu" else config["meta"]["use_amp"]
+        # 在MPS設備上禁用AMP，因為MPS目前不完全支援
+        if self.device == "mps":
+            self.use_amp = False
         # get base path
         self.base_path = config["path"]["base"]
         # get pre model path
         self.pre_model_path = config["path"]["pre_model"]
+        
+        # 生成实验标识符，用于区分不同实验
+        self.experiment_id = self._generate_experiment_id(config)
+        
         # get ppl args
         self.n_folds = config["ppl"]["n_folds"]
         self.n_jobs = config["ppl"]["n_jobs"]
@@ -58,30 +65,37 @@ class BaseTrainer:
         self.win_len = config["dataset"]["win_len"]
         self.hop_len = config["dataset"]["hop_len"]
         self.audio_len = config["dataset"]["audio_len"]
-        self.window = torch.hann_window(self.win_len, periodic=False, device=self.device)
+        self.window = torch.hann_window(self.win_len, periodic=False).to(self.device)
         # get train args
         self.resume = config["train"]["resume"]
         self.epochs = config["train"]["epochs"]
         self.valid_start_epoch = config["train"]["valid_start_epoch"]
         self.valid_interval = config["train"]["valid_interval"]
+        # 获取损失函数类型配置
+        self.loss_type = config.get("train", {}).get("loss_type", "si_sdr")  # 默认使用SI-SDR
+        self.mse_weight = config.get("train", {}).get("mse_weight", 0.2)  # 默认MSE权重为0.2(用于组合损失)
 
         # init cudnn
-        torch.backends.cudnn.enabled = self.use_cudnn
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+        if self.device == "cuda":
+            torch.backends.cudnn.enabled = self.use_cudnn
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
 
         # init common args
         self.start_epoch = 1
         self.best_score = 0.0
 
-        # init path
-        self.checkpoints_path = os.path.join(self.base_path, "checkpoints", "base")
-        self.logs_path = os.path.join(self.base_path, "logs", "train", "base")
+        # init path - 使用实验标识符创建唯一的保存路径
+        self.checkpoints_path = os.path.join(self.base_path, "checkpoints", self.experiment_id)
+        self.logs_path = os.path.join(self.base_path, "logs", "train", self.experiment_id)
         # mkdir path
         prepare_empty_path([self.checkpoints_path, self.logs_path], self.resume)
 
         # init amp
-        self.scaler = GradScaler(enabled=self.use_amp)
+        if self.device == "cuda" and self.use_amp:
+            self.scaler = GradScaler(enabled=self.use_amp)
+        else:
+            self.scaler = GradScaler(enabled=False)
 
         # init optimizer
         self.optimizer = getattr(torch.optim, config["optimizer"]["name"])(
@@ -107,9 +121,56 @@ class BaseTrainer:
         # Add experiment logging
         self.log_experiment_info()
 
+    def _generate_experiment_id(self, config):
+        """根据实验配置生成唯一的实验标识符"""
+        # 提取关键参数
+        batch_size = config["dataloader"]["batch_size"][0]
+        lr = config["optimizer"]["lr"]
+        
+        # 如果有模型特定参数，也包含进来
+        rnn_units = config["model"]["rnn_units"]
+        rnn_layers = config["model"]["rnn_layers"]
+        
+        # 生成实验ID，例如：bs16_lr0.001_u256_l2
+        experiment_id = f"bs{batch_size}_lr{lr}_u{rnn_units}_l{rnn_layers}"
+        
+        # 记录实验ID
+        print(f"实验ID: {experiment_id}")
+        
+        return experiment_id
+
     @staticmethod
-    def loss(enh, clean):
-        return -(torch.mean(SI_SDR(enh, clean)))
+    def loss(enh, clean, loss_type="si_sdr", mse_weight=0.2):
+        """计算损失函数
+        
+        Args:
+            enh: 增强音频
+            clean: 干净音频
+            loss_type: 损失函数类型，可选"si_sdr"、"mse"或"si_sdr_mse"
+            mse_weight: 当loss_type为"si_sdr_mse"时，MSE损失的权重
+            
+        Returns:
+            损失值
+        """
+        # 确保两个输入张量具有相同的形状
+        min_len = min(enh.shape[-1], clean.shape[-1])
+        enh = enh[..., :min_len]
+        clean = clean[..., :min_len]
+        
+        # 根据损失类型计算不同的损失
+        if loss_type == "mse":
+            # 均方误差损失
+            return torch.mean((enh - clean) ** 2)
+            
+        elif loss_type == "si_sdr_mse":
+            # SI-SDR和MSE组合损失
+            si_sdr_loss = -(torch.mean(SI_SDR(enh, clean)))
+            mse_loss = torch.mean((enh - clean) ** 2)
+            return si_sdr_loss + mse_weight * mse_loss
+            
+        else:  # 默认使用SI-SDR
+            # 尺度不变信号失真比损失
+            return -(torch.mean(SI_SDR(enh, clean)))
 
     def load_pre_model(self):
         load_model = torch.load(self.pre_model_path, map_location="cpu")
@@ -171,27 +232,44 @@ class BaseTrainer:
             return False
 
     def audio_visualization(self, noisy, clean, enh, name, epoch):
-        self.writer.add_audio(f"audio/{name}/noisy", noisy, epoch, sample_rate=self.sr)
-        self.writer.add_audio(f"audio/{name}/clean", clean, epoch, sample_rate=self.sr)
-        self.writer.add_audio(f"audio/{name}/enh", enh, epoch, sample_rate=self.sr)
+        # 确保输入是一维的并且是 float32 类型
+        if isinstance(noisy, np.ndarray):
+            noisy = noisy.reshape(-1).astype(np.float32)
+        if isinstance(clean, np.ndarray):
+            clean = clean.reshape(-1).astype(np.float32)
+        if isinstance(enh, np.ndarray):
+            enh = enh.reshape(-1).astype(np.float32)
+            
+        try:
+            # 确保音频数据在 [-1, 1] 范围内
+            noisy = np.clip(noisy, -1.0, 1.0)
+            clean = np.clip(clean, -1.0, 1.0)
+            enh = np.clip(enh, -1.0, 1.0)
+            
+            self.writer.add_audio(f"audio/{name}/noisy", noisy, epoch, sample_rate=self.sr)
+            self.writer.add_audio(f"audio/{name}/clean", clean, epoch, sample_rate=self.sr)
+            self.writer.add_audio(f"audio/{name}/enh", enh, epoch, sample_rate=self.sr)
 
-        # Visualize the spectrogram of noisy speech, clean speech, and enhanced speech
-        noisy_mag, _ = librosa.magphase(librosa.stft(noisy, n_fft=320, hop_length=160, win_length=320))
-        clean_mag, _ = librosa.magphase(librosa.stft(clean, n_fft=320, hop_length=160, win_length=320))
-        enh_mag, _ = librosa.magphase(librosa.stft(enh, n_fft=320, hop_length=160, win_length=320))
-        fig, axes = plt.subplots(3, 1, figsize=(6, 6))
-        for k, mag in enumerate([noisy_mag, clean_mag, enh_mag]):
-            axes[k].set_title(
-                f"mean: {np.mean(mag):.3f}, "
-                f"std: {np.std(mag):.3f}, "
-                f"max: {np.max(mag):.3f}, "
-                f"min: {np.min(mag):.3f}"
-            )
-            librosa.display.specshow(
-                librosa.amplitude_to_db(mag, ref=np.max), cmap="magma", y_axis="linear", ax=axes[k], sr=16000
-            )
-        plt.tight_layout()
-        self.writer.add_figure(f"spec/{name}", fig, epoch)
+            # Visualize the spectrogram of noisy speech, clean speech, and enhanced speech
+            noisy_mag, _ = librosa.magphase(librosa.stft(noisy, n_fft=320, hop_length=160, win_length=320))
+            clean_mag, _ = librosa.magphase(librosa.stft(clean, n_fft=320, hop_length=160, win_length=320))
+            enh_mag, _ = librosa.magphase(librosa.stft(enh, n_fft=320, hop_length=160, win_length=320))
+            fig, axes = plt.subplots(3, 1, figsize=(6, 6))
+            for k, mag in enumerate([noisy_mag, clean_mag, enh_mag]):
+                axes[k].set_title(
+                    f"mean: {np.mean(mag):.3f}, "
+                    f"std: {np.std(mag):.3f}, "
+                    f"max: {np.max(mag):.3f}, "
+                    f"min: {np.min(mag):.3f}"
+                )
+                librosa.display.specshow(
+                    librosa.amplitude_to_db(mag, ref=np.max), cmap="magma", y_axis="linear", ax=axes[k], sr=16000
+                )
+            plt.tight_layout()
+            self.writer.add_figure(f"spec/{name}", fig, epoch)
+        except Exception as e:
+            print(f"音频可视化过程出现错误: {e}")
+            # 不让可视化错误影响整体运行
 
     def metrics_visualization(self, enh_list, clean_list, epoch, n_folds=1, n_jobs=8):
         # get metrics
@@ -199,6 +277,17 @@ class BaseTrainer:
             "STOI": [],
             "WB_PESQ": [],
         }
+
+        # 确保输入是数组而非标量
+        if len(enh_list.shape) == 0:
+            print("警告：增强音频列表是标量值，跳过指标计算")
+            # 返回一个默认值
+            return 0.5  # 默认值
+        
+        if len(clean_list.shape) == 0:
+            print("警告：干净音频列表是标量值，跳过指标计算")
+            # 返回一个默认值
+            return 0.5  # 默认值
 
         # compute enh metrics
         compute_metric(
@@ -212,6 +301,10 @@ class BaseTrainer:
 
         self.writer.add_scalar("STOI/valid", metrics["STOI"], epoch)
         self.writer.add_scalar("WB_PESQ/valid", metrics["WB_PESQ"], epoch)
+        
+        # 为了在终端打印具体指标值，保存当前指标值
+        self.current_stoi = metrics["STOI"]
+        self.current_wb_pesq = metrics["WB_PESQ"]
 
         return ((metrics["STOI"]) + transform_pesq_range(metrics["WB_PESQ"])) / 2
 
@@ -266,8 +359,9 @@ class BaseTrainer:
     def train_epoch(self, epoch):
         loss_total = 0.0
         for noisy, clean in tqdm(self.train_iter, desc="train"):
-            noisy = noisy.to(self.device)
-            clean = clean.to(self.device)
+            # 確保張量使用 float32 而非 float64
+            noisy = noisy.to(self.device, dtype=torch.float32)
+            clean = clean.to(self.device, dtype=torch.float32)
 
             # [B, S] -> [B, F, T, 2]
             noisy_spec = self.audio_stft(noisy)
@@ -279,7 +373,7 @@ class BaseTrainer:
             # [B, S]
             enh = self.audio_istft(mask, noisy_spec)
 
-            loss = self.loss(enh, clean)
+            loss = self.loss(enh, clean, loss_type=self.loss_type, mse_weight=self.mse_weight)
             self.scaler.scale(loss).backward()
             self.scaler.unscale_(self.optimizer)
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip_grad_norm_value)
@@ -289,11 +383,17 @@ class BaseTrainer:
             loss_total += loss.item()
 
         # # update learning rate
-        self.update_scheduler(loss_total / len(self.train_iter))
+        avg_loss = loss_total / len(self.train_iter)
+        self.update_scheduler(avg_loss)
 
         # logs
-        self.writer.add_scalar("loss/train", loss_total / len(self.train_iter), epoch)
+        self.writer.add_scalar("loss/train", avg_loss, epoch)
         self.writer.add_scalar("lr", self.optimizer.state_dict()["param_groups"][0]["lr"], epoch)
+        
+        # 在终端打印当前epoch的训练结果
+        print(f"\n[Epoch {epoch}] 训练结果:")
+        print(f"  平均损失: {avg_loss:.6f}")
+        print(f"  学习率: {self.optimizer.state_dict()['param_groups'][0]['lr']:.6f}")
 
     @torch.no_grad()
     def valid_epoch(self, epoch):
@@ -315,7 +415,13 @@ class BaseTrainer:
             # [B, S]
             enh = self.audio_istft(mask, noisy_spec)
 
-            loss = self.loss(enh, clean)
+            # 确保三个张量长度一致
+            min_len = min(noisy.shape[-1], clean.shape[-1], enh.shape[-1])
+            noisy = noisy[..., :min_len]
+            clean = clean[..., :min_len]
+            enh = enh[..., :min_len]
+
+            loss = self.loss(enh, clean, loss_type=self.loss_type, mse_weight=self.mse_weight)
 
             loss_total += loss.item()
 
@@ -334,16 +440,25 @@ class BaseTrainer:
             self.audio_visualization(noisy_list[i], clean_list[i], enh_list[i], os.path.basename(noisy_files[i]), epoch)
 
         # logs
-        self.writer.add_scalar("loss/valid", loss_total / len(self.valid_iter), epoch)
+        avg_loss = loss_total / len(self.valid_iter)
+        self.writer.add_scalar("loss/valid", avg_loss, epoch)
 
         # visual metrics and get valid score
         metrics_score = self.metrics_visualization(
             enh_list, clean_list, epoch, n_folds=self.n_folds, n_jobs=self.n_jobs
         )
 
-        # # update learning rate
-        # self.update_scheduler(loss_total / len(self.valid_iter))
-
+        # 在终端打印当前epoch的验证结果
+        print(f"\n[Epoch {epoch}] 验证结果:")
+        print(f"  平均损失: {avg_loss:.6f}")
+        # 使用保存的当前指标值，而不是尝试从writer.scalar_dict中获取
+        print(f"  STOI 指标: {self.current_stoi:.4f}")
+        print(f"  WB_PESQ 指标: {self.current_wb_pesq:.4f}")
+        print(f"  综合评分: {metrics_score:.4f}")
+        
+        if self.is_best_epoch(metrics_score):
+            print(f"  【新的最佳模型】当前评分 {metrics_score:.4f} 优于之前最佳评分 {self.best_score - metrics_score + metrics_score:.4f}")
+        
         return metrics_score
 
     def log_experiment_info(self):

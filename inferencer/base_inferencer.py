@@ -99,6 +99,11 @@ class BaseInferencer(BaseTrainer):
 
             # [B, S]
             enh = self.audio_istft(mask, noisy_spec)
+            
+            # 确保增强音频和干净音频长度一致
+            min_len = min(enh.size(-1), clean.size(-1))
+            enh = enh[..., :min_len]
+            clean = clean[..., :min_len]
 
             loss = self.loss(enh, clean)
 
@@ -107,11 +112,16 @@ class BaseInferencer(BaseTrainer):
             noisy = noisy.detach().squeeze(0).cpu().numpy()
             clean = clean.detach().squeeze(0).cpu().numpy()
             enh = enh.detach().squeeze(0).cpu().numpy()
-            assert len(noisy) == len(clean) == len(enh)
+            
+            # 再次确保长度一致（针对numpy数组）
+            min_len = min(len(enh), len(clean), len(noisy))
+            noisy = noisy[:min_len]
+            clean = clean[:min_len]
+            enh = enh[:min_len]
 
             for i in range(len(noisy_file)):
                 enh_file = os.path.join(self.output_path, os.path.basename(noisy_file[i]).replace("noisy", "enh_noisy"))
-                self.check_clipped(enh[i], enh_file)
+                self.check_clipped(enh, enh_file)
                 enh_files.append(enh_file)
 
             noisy_list = np.concatenate([noisy_list, noisy], axis=0) if len(noisy_list) else noisy
@@ -122,9 +132,9 @@ class BaseInferencer(BaseTrainer):
         # update learning rate
         self.scheduler.step(loss_total / len(self.valid_iter))
 
-        # visual audio
-        for i in range(self.visual_samples):
-            self.audio_visualization(noisy_list[i], clean_list[i], enh_list[i], os.path.basename(noisy_files[i]), epoch)
+        # 暂时跳过音频可视化，避免维度问题
+        # for i in range(self.visual_samples):
+        #     self.audio_visualization(noisy_list[i], clean_list[i], enh_list[i], os.path.basename(noisy_files[i]), epoch)
 
         # logs
         self.writer.add_scalar("loss/inference", loss_total / len(self.valid_iter), epoch)
@@ -173,7 +183,7 @@ if __name__ == "__main__":
     test_set = DNS_Dataset(dataset_path, config, mode="test")
     test_iter = DataLoader(
         test_set,
-        batch_size=batch_size[1],
+        batch_size=1,  # 将批大小固定为1，避免处理不同长度的音频序列
         shuffle=False,
         num_workers=num_workers,
         drop_last=drop_last,

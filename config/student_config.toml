@@ -1,0 +1,67 @@
+[meta]
+use_cudnn = true
+use_amp = true
+description = "知识蒸馏 - 学生模型配置"
+
+[ppl]
+n_folds = 1
+n_jobs = 8
+
+[path]
+base = "./output/dccrn"
+pre_model = 0  # 从头开始训练
+
+[visual]
+samples = 2
+
+[checkpoint]
+save_interval = 1
+
+[optimizer]
+name = "Adam"
+lr = 1e-3
+
+[grad]
+clip_grad_norm_value = 10.0
+
+[lr_scheduler]
+name = "ReduceLROnPlateau"
+mode = "min"
+factor = 0.8
+patience = 1
+threshold = 1e-3
+min_lr = 1e-5
+verbose = true
+
+[dataloader]
+batch_size = [32, 32]  # 使用批大小32
+num_workers = 4
+drop_last = false
+pin_memory = false
+
+[dataset]
+version = "1.0.0"
+sr = 16000
+n_fft = 512
+win_len = 512
+hop_len = 256
+audio_len = 3.072
+limit = 0
+
+[model]
+name = "DSDCCRN"  # 使用深度可分离DCCRN作为学生模型
+rnn_units = 128   # 减少RNN单元数
+rnn_layers = 2
+kernel_num = [2, 16, 32, 64, 128, 128, 128]  # 减少卷积核数量
+kernel_size = 5
+
+[train]
+resume = false
+epochs = 128
+valid_start_epoch = 1
+valid_interval = 1
+
+[knowledge_distillation]
+teacher_model = "output/dccrn/checkpoints/bs32_lr0.001_u256_l2/latest_model.pth"  # 修正为正确的教师模型路径
+margin = 1.2  # 边界损失的裕度参数
+v = 0.5      # 边界损失的权重

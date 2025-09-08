@@ -16,12 +16,15 @@ from audio.feature import sub_sample
 
 
 class DNS_Dataset(Dataset):
-    def __init__(self, set_path, config, mode="train"):
+    def __init__(self, set_path, config, mode="train", normalize_audio=True):
         super().__init__()
         assert mode in ["train", "valid", "test"]
 
         # set mode
         self.mode = mode
+        
+        # 添加归一化标志
+        self.normalize_audio = normalize_audio
 
         # get args
         self.sr = config["dataset"]["sr"]
@@ -51,14 +54,32 @@ class DNS_Dataset(Dataset):
     def __len__(self):
         return self.length
 
+    def normalize(self, audio):
+        """对音频进行归一化处理，确保最大振幅为0.9"""
+        if np.max(np.abs(audio)) > 0:  # 避免全零音频导致的除零错误
+            # 将音频归一化到[-0.9, 0.9]范围，留出一点余量避免截断
+            scale_factor = 0.9 / np.max(np.abs(audio))
+            return audio * scale_factor
+        return audio
+
     def __getitem__(self, idx):
         if self.mode in ["train"]:
             # load noisy
             noisy_file = self.noisy_files[idx]
             noisy, _ = librosa.load(noisy_file, sr=self.sr)
+            
+            # 对noisy音频进行归一化
+            if self.normalize_audio:
+                noisy = self.normalize(noisy)
+                
             # load clean
             clean_file = self.clean_files[idx]
             clean, _ = librosa.load(clean_file, sr=self.sr)
+            
+            # 对clean音频进行归一化
+            if self.normalize_audio:
+                clean = self.normalize(clean)
+                
             # get target samples
             noisy, clean = sub_sample(noisy, clean, self.samples)
 
@@ -67,9 +88,18 @@ class DNS_Dataset(Dataset):
             # load noisy
             noisy_file = self.noisy_files[idx]
             noisy, _ = librosa.load(noisy_file, sr=self.sr)
+            
+            # 对noisy音频进行归一化
+            if self.normalize_audio:
+                noisy = self.normalize(noisy)
+                
             # load clean
             clean_file = self.clean_files[idx]
             clean, _ = librosa.load(clean_file, sr=self.sr)
+            
+            # 对clean音频进行归一化
+            if self.normalize_audio:
+                clean = self.normalize(clean)
 
             return noisy, clean, noisy_file
 
